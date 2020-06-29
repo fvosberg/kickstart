@@ -1,0 +1,20 @@
+version: '3.7'
+
+services:
+  postgresd:
+    image: postgres:9.6
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=gopher
+      - POSTGRES_PASSWORD=secret
+      - POSTGRES_DB=hello-go
+
+  hello-go:
+    build: ./
+    ports:
+      - "80:80" # public
+    restart: unless-stopped
+    environment:
+      - HELLO_POSTGRES_DSN=postgres://gopher:secret@postgresd:5432/hello-go?sslmode=disable
+      - HELLO_PORT=80
