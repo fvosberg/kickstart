@@ -29,12 +29,12 @@ func TestServerCreateGreetingSucceess(t *testing.T) {
 
 	log := logrus.New()
 
-	r := NewRouter(log, repository)
+	r := NewRouter(log, "svc-v1", repository)
 	s := httptest.NewServer(r)
 	defer s.Close()
 
 	reqBody := strings.NewReader(`{"firstName":"fredi","text":"Haaaaloooooo"}`)
-	req, err := http.NewRequest("POST", s.URL+"/greetings", reqBody)
+	req, err := http.NewRequest("POST", s.URL+"/svc-v1/greetings", reqBody)
 	if err != nil {
 		t.Fatalf("creating request: %s", err)
 	}
@@ -167,7 +167,7 @@ func TestServerGreetings(t *testing.T) {
 	log := logrus.New()
 	log.SetOutput(ioutil.Discard)
 
-	r := NewRouter(log, repository)
+	r := NewRouter(log, "", repository)
 	s := httptest.NewServer(r)
 	defer s.Close()
 

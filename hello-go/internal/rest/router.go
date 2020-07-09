@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"path"
 
 	"github.com/fvosberg/kickstart/hello-go/internal"
 	"github.com/gorilla/mux"
@@ -18,15 +19,23 @@ type storage interface {
 	SaveGreeting(ctx context.Context, g *internal.Greeting) error
 }
 
-func NewRouter(log *logrus.Logger, repository storage) http.Handler {
+func NewRouter(log *logrus.Logger, basePath string, repository storage) http.Handler {
 	s := server{
 		log:     log,
 		storage: repository,
 	}
 
 	r := mux.NewRouter()
-	r.HandleFunc("/greetings", s.serveCreateGreeting).Methods("POST")
-	r.HandleFunc("/greetings", s.serveGreetingsList).Methods("GET")
+
+	// TODO subrouter?
+	r.HandleFunc("/"+path.Join(basePath, "greetings"), s.serveCreateGreeting).Methods("POST")
+	r.HandleFunc("/"+path.Join(basePath, "greetings"), s.serveGreetingsList).Methods("GET")
+	// TODO check postgres
+	r.HandleFunc("/"+path.Join(basePath, "debug/health"), s.serveHealthCheck).Methods("GET")
+
+	r.NotFoundHandler = http.HandlerFunc(s.serveNotFound)
+	r.MethodNotAllowedHandler = http.HandlerFunc(s.serveMethodNotAllowed)
+
 	return r
 }
 
@@ -110,6 +119,19 @@ func badInputf(err error, msg string, args ...interface{}) badInputError {
 		msg:     fmt.Sprintf("%s: %s", fmt.Sprintf(msg, args...), err),
 		wrapped: err,
 	}
+}
+
+func (s server) serveNotFound(w http.ResponseWriter, r *http.Request) {
+	err := fmt.Errorf("endpoint %s %s", r.Method, r.URL.String())
+	s.writeError("Not Found Handler", w, err, 404, 1593621251)
+}
+
+func (s server) serveMethodNotAllowed(w http.ResponseWriter, r *http.Request) {
+	err := fmt.Errorf("endpoint %s %s", r.Method, r.URL.String())
+	s.writeError("Not Found Handler", w, err, 405, 1593621251)
+}
+func (s server) serveHealthCheck(w http.ResponseWriter, r *http.Request) {
+	w.Write([]byte(`{"status":"ok"}`))
 }
 
 func (s server) writeError(endpointName string, w http.ResponseWriter, err error, httpCode, errorCode int) {

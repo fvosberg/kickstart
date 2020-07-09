@@ -1,0 +1,125 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Creates the resources all fargate services will need
+
+Parameters:
+  EnvironmentName:
+    Description: An environment name that is prefixed to resource names
+    Type: String
+  VPCId:
+    Type: String
+  PublicSubnets:
+    Type: String
+  DatabaseSecurityGroupId:
+    Type: String
+
+
+Resources:
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Join ['-', [!Ref EnvironmentName, cluster]]
+
+  ServiceTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: !Sub "Role used in the ${EnvironmentName} stack for accessing AWS service from EC2"
+      RoleName: !Sub "${EnvironmentName}-service-task-role"
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: 'sts:AssumeRole'
+
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: !Sub "Role used in the ${EnvironmentName} stack for container execution"
+      RoleName: !Sub "${EnvironmentName}-execution-role"
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy'
+
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    DependsOn: ContainerSecurityGroup
+    Properties:
+      Name: !Sub ${EnvironmentName}-service-lb
+      Subnets: !Split [',', !Ref PublicSubnets]
+      SecurityGroups:
+        - !Ref ContainerSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-service-lb
+
+  LoadBalancerListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+      # TODO: HTTPS
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref DefaultTargetGroup
+            #
+  # We define a default target group here, as this is a mandatory Parameters
+  # when creating an Application Load Balancer Listener. This is not used, instead
+  # a target group is created per-service in each service template (../services/*)
+  DefaultTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub ${EnvironmentName}-default
+      VpcId: !Ref VPCId
+      Port: 80
+      Protocol: HTTP
+
+
+
+  ContainerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+        GroupDescription: SG for the ALB to access the services
+        VpcId: !Ref VPCId
+        SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  ServiceDatabaseAccessSecurityGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    DependsOn:
+      - ContainerSecurityGroup
+    Properties:
+      GroupId: !Ref DatabaseSecurityGroupId
+      IpProtocol: tcp
+      FromPort: '5432'
+      ToPort: '5432'
+      SourceSecurityGroupId: !GetAtt ContainerSecurityGroup.GroupId
+
+
+
+Outputs:
+  ServiceTaskRole:
+    Value: !Ref ServiceTaskRole
+  ExecutionRole:
+    Value: !Ref ExecutionRole
+  Cluster:
+    Value: !Ref Cluster
+  ContainerSecurityGroup:
+    Value: !Ref ContainerSecurityGroup
+  LoadBalancer:
+    Value: !Ref LoadBalancer
+  LoadBalancerUrl:
+    Value: !GetAtt LoadBalancer.DNSName
+  LoadBalancerListener:
+    Value: !Ref LoadBalancerListener

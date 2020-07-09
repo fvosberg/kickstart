@@ -3,23 +3,34 @@ AWS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 
 set -e
 
-# TODO Check AWS configured?
 # TODO check jq installed
 
 # TODO gateway?
 # TODO cleanup script
+CFN_TEMPLATE="${AWS_DIR}/stack.yaml"
+REGION=$(aws configure get region)
+ACCOUNT=$(aws sts get-caller-identity | jq -r ".Account")
+BUCKET_NAME_SHORT="devops-tools"
+
+DATABASE_PROVIDER_PATH="${AWS_DIR}/database-provider-latest.zip"
+if [ ! -f "${DATABASE_PROVIDER_PATH}" ]; then
+  echo "Recreating database provider zip"
+  /Users/frederikvosberg/code/frederikvosberg/cfn-postgres-provider/build.sh --out "${DATABASE_PROVIDER_PATH}"
+fi
+
 
 while test $# -gt 0; do
   case "$1" in
     -h|--help)
-      echo "$package - attempt to capture frames"
+      echo "$0 - provisions the infrstructure via cloudformation"
       echo " "
-      echo "$package [options] application [arguments]"
+      echo "$0 [options]"
       echo " "
       echo "options:"
-      echo "-h, --help                show brief help"
-      echo "-a, --action=ACTION       specify an action to use"
-      echo "-o, --output-dir=DIR      specify a directory to store output in"
+      echo "-h, --help                     show brief help"
+      echo "-s, --stack=[STACK_NAME]       specify the name for the cloudformation stack"
+      echo "-i, --image=[DOCKER_IMAGE_URL] specify the docker image URL to deploy"
+      echo "--db-pass-file=[PATH]          specify the path to the file containing the password for the db"
       exit 0
       ;;
 
@@ -45,13 +56,23 @@ while test $# -gt 0; do
       shift
       ;;
 
-
-    --db-pass-file)
+    -r|--region)
       shift
       if test $# -gt 0; then
-        DB_PASS="$(cat $1)"
+        REGION="$1"
       else
-        echo -e "\n\nNo db password file path specified\n\n"
+        echo -e "\n\nNo region specified\n\n"
+        exit 1
+      fi
+      shift
+      ;;
+
+    --template-file)
+      shift
+      if test $# -gt 0; then
+        CFN_TEMPLATE="$1"
+      else
+        echo -e "\n\nNo template file specified\n\n"
         exit 1
       fi
       shift
@@ -67,58 +88,51 @@ if [ "$STACK_NAME" == "" ]; then
   exit 1
 fi
 
-if [ "$DB_PASS" == "" ]; then
-  echo -e "\n\nMissing db password - either the password file hasn't been provided nor the password file is emtpy\n\n$0 --db-pass-file [path]\n"
+if [ "$REGION" == "" ]; then
+  echo -e "\n\nMissing region - either configure the default region for your account in the CLI or provide one via flag\n\n$0 --region [region]\n"
   exit 1
 fi
 
-echo "\nImage url: ${IMAGE_URL}\n"
+BUCKET_NAME_FULL="${ACCOUNT}-${REGION}-${BUCKET_NAME_SHORT}"
 
+function ensureBucketExists {
+  if [ -z "$1" ] || [ -z "$2" ]; then
+    echo -e "\nMissing bucket name ($1) or region ($2) in ensureBucketExists\n"
+    exit 1
+  fi
+
+  set +e
+  aws s3api head-bucket --bucket "$1" > /dev/null 2>&1
+  RETURN=$?
+  set -e
+
+  if [ ! $RETURN -eq 0 ]; then
+    aws s3api create-bucket \
+      --bucket "$1" \
+      --create-bucket-configuration "LocationConstraint=$2"
+  fi
+}
+
+ensureBucketExists "${BUCKET_NAME_FULL}" "${REGION}"
+
+# package nested stack to upload it with S3 template URIs to S3
+aws cloudformation package \
+  --template-file "${CFN_TEMPLATE}" \
+  --s3-bucket "${BUCKET_NAME_FULL}" \
+  --output-template-file "${AWS_DIR}/stack.packaged.yaml"
+
+DATABASE_PROVIDER_ZIP_FILE="custom-providers/$(basename "${DATABASE_PROVIDER_PATH}")"
+aws s3 cp "${DATABASE_PROVIDER_PATH}" "s3://${BUCKET_NAME_FULL}/${DATABASE_PROVIDER_ZIP_FILE}"
+
+
+
+# deploy the packed stack
 aws cloudformation deploy \
   --stack-name "$STACK_NAME" \
-  --template-file "${AWS_DIR}/stack.yml" \
+  --template-file "${AWS_DIR}/stack.packaged.yaml" \
   --no-fail-on-empty-changeset \
   --capabilities CAPABILITY_NAMED_IAM \
   --parameter-overrides \
-    "DBPassword=${DB_PASS}" \
-    "HelloGophersImage=${IMAGE_URL}"
-
-exit 0
-
-  --capabilities CAPABILITY_NAMED_IAM \
-
-OPERATION=create-stack
-WAIT_FOR=stack-create-complete
-
-# TODO check if jq is installed
-set +e
-STACK_JSON=$(aws cloudformation describe-stacks --stack-name "${STACK_NAME}" 2> /dev/null)
-DESCRIBE_STACK_RETURN=$?
-set -e
-# this stack already exists
-if [ $DESCRIBE_STACK_RETURN -eq 0 ]; then
-  OPERATION=update-stack
-  WAIT_FOR=stack-update-complete
-
-  STACK_STATUS="$(echo $STACK_JSON | jq -r ".Stacks[0].StackStatus")"
-
-  # AWS doesn't allow stack updates on rolled back stacks to force error investigation
-  # we don't want that, so we are deleting the rolled back stack and are recreating it
-  if [ "$STACK_STATUS" == "ROLLBACK_COMPLETE" ]; then
-    echo -e "\nDeleting rolled back stack.\n"
-    aws cloudformation delete-stack --stack-name "$STACK_NAME"
-    echo -e "\nWaiting for stack deletion to complete\n"
-    aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME"
-    echo -e "\nStack deletion completed\n"
-    OPERATION=create-stack
-  fi
-fi
-
-#HELLO_GOPHERS_IMAGE_URL="332349559535.dkr.ecr.eu-central-1.amazonaws.com/devclops/hello-gophers:dev-master-20200625T071558Z"
-
-
-echo -e "\nWaiting for ${WAIT_FOR}\n"
-
-aws cloudformation wait "$WAIT_FOR" --stack-name "$STACK_NAME"
-
-echo -e "\nSuccessful ${WAIT_FOR}\n"
+    "HelloGophersImage=${IMAGE_URL}" \
+    "DatabaseProviderZipFileName=${DATABASE_PROVIDER_ZIP_FILE}" \
+    "DatabaseProviderS3Bucket=${BUCKET_NAME_FULL}"

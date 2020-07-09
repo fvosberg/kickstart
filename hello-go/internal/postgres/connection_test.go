@@ -8,6 +8,7 @@ import (
 
 	"github.com/fvosberg/kickstart/hello-go/internal"
 	"github.com/gofrs/uuid"
+	"github.com/jackc/pgconn"
 )
 
 func TestGreetings(t *testing.T) {
@@ -88,4 +89,27 @@ func TestGreetings(t *testing.T) {
 func (c *Connection) Truncate(ctx context.Context) error {
 	_, err := c.pool.Exec(ctx, "TRUNCATE greetings")
 	return err
+}
+
+// This is a test just for development to validate the syntax of the DSN
+func TestParsingSocketURL(t *testing.T) {
+	s := `dbname=hello-go-db host=fvosbe-bachelor-thesis:europe-west1:master-postgres user=fredi password=hoi`
+	c, err := pgconn.ParseConfig(s)
+	if err != nil {
+		t.Fatalf("Parsing failed: %s", err)
+	}
+	if c.Database != "hello-go-db" {
+		t.Errorf("Unexpected database %q, expected %q", c.Database, "hello-go-db")
+	}
+	if c.Host != "fvosbe-bachelor-thesis:europe-west1:master-postgres" {
+		t.Errorf("Unexpected database %q, expected %q", c.Host, "hello-go-db")
+	}
+	if c.User != "fredi" {
+		t.Errorf("Unexpected user %q, expected %q", c.User, "fredi")
+	}
+	if c.Password != "hoi" {
+		t.Errorf("Unexpected user %q, expected %q", c.Password, "hoi")
+	}
+	t.Logf("Config: %#v\n", c)
+
 }

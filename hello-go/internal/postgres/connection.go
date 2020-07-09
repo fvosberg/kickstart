@@ -38,7 +38,7 @@ func (c *Connection) Greetings(ctx context.Context) ([]internal.Greeting, error)
 	}
 
 	defer rows.Close()
-	var gg []internal.Greeting
+	gg := []internal.Greeting{}
 
 	var n uint32
 	// TODO index über created_at
@@ -53,12 +53,12 @@ func (c *Connection) Greetings(ctx context.Context) ([]internal.Greeting, error)
 	return gg, nil
 }
 
-func (c *Connection) Migrate(ctx context.Context, migrationsPath string) error {
+func (c *Connection) Migrate(ctx context.Context, migrationsPath string, skipFirstMigration bool) error {
 	conn, err := c.pool.Acquire(ctx)
 	if err != nil {
 		return fmt.Errorf("acquiring conn failed: %w", err)
 	}
 	defer conn.Release()
 
-	return migrateOnConnection(ctx, conn.Conn(), migrationsPath)
+	return migrateOnConnection(ctx, conn.Conn(), migrationsPath, skipFirstMigration)
 }

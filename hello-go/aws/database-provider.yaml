@@ -1,0 +1,116 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Creates the needed custom resource providers
+
+Parameters:
+  EnvironmentName:
+    Description: An environment name that is prefixed to resource names
+    Type: String
+    MinLength: 1
+  S3Bucket:
+    Type: String
+    MinLength: 1
+  ZipFileName:
+    Type: String
+    MinLength: 1
+  VPCId:
+    Type: String
+  SubnetIds:
+    Type: String
+    MinLength: 1
+  DatabaseSecurityGroupId:
+    Type: String
+    MinLength: 1
+
+Resources:
+  DatabaseProvider:
+    Type: AWS::Lambda::Function
+    DependsOn:
+      - LambdaRole
+      - LambdaPolicy
+      - SecurityGroup
+    Properties:
+      Description: CloudFormation Custom:PostgresDatabase implementation
+      Code:
+        S3Bucket: !Ref S3Bucket
+        S3Key: !Ref ZipFileName
+      FunctionName: !Sub '${EnvironmentName}-postgres-db-provider'
+      Role: !GetAtt LambdaRole.Arn
+      Runtime: go1.x
+      Handler: main
+      MemorySize: 128
+      Timeout: 10
+      VpcConfig:
+        SecurityGroupIds:
+          - !GetAtt SecurityGroup.GroupId
+        SubnetIds: !Split [',', !Ref SubnetIds]
+
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: SG for the database
+      VpcId: !Ref VPCId
+
+  DatabaseAccessSecurityGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref DatabaseSecurityGroupId
+      IpProtocol: tcp
+      FromPort: '5432'
+      ToPort: '5432'
+      SourceSecurityGroupId: !GetAtt SecurityGroup.GroupId
+
+  # TODO restrict to needed access
+  LambdaPolicy:
+    Type: AWS::IAM::Policy
+    DependsOn:
+      - LambdaRole
+    Properties:
+      PolicyName: !Sub "${EnvironmentName}-CustomResourceProviderPolicy"
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Action:
+              - iam:CreateAccessKey
+              - iam:DeleteAccessKey
+              - iam:UpdateAccessKey
+              - ssm:PutParameter
+              - ssm:GetParameter
+              - ssm:DeleteParameter
+              - ec2:ImportKeyPair
+              - ec2:DeleteKeyPair
+              - secretsmanager:DeleteSecret
+              - secretsmanager:CreateSecret
+              - secretsmanager:UpdateSecret
+            Effect: Allow
+            Resource:
+              - '*'
+          - Action:
+              - kms:Decrypt
+            Effect: Allow
+            Resource:
+              # TODO - !GetAtt 'Key.Arn'
+              - '*'
+          - Action:
+              - logs:*
+            Effect: Allow
+            Resource: arn:aws:logs:*:*:*
+      Roles:
+        - !Ref LambdaRole
+
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+Outputs:
+  ServiceToken:
+    Value: !GetAtt DatabaseProvider.Arn

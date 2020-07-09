@@ -1,0 +1,184 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Creates a fargate service with it's own db in the provided db instance
+
+Parameters:
+  EnvironmentName:
+    Description: An environment name that is prefixed to resource names
+    Type: String
+  ServiceName:
+    Type: String
+  ExecutionRole:
+    Type: String
+  ServiceTaskRole:
+    Type: String
+  DockerImage:
+    Type: String
+  DBHost:
+    Type: String
+  LoadBalancerListener:
+    Type: String
+  ECSCluster:
+    Type: String
+  ContainerSecurityGroup:
+    Type: String
+  VPCId:
+    Type: String
+  SubnetIds:
+    Type: String
+  SecretsProviderServiceToken:
+    Type: String
+  DatabaseProviderServiceToken:
+    Type: String
+  DBPort:
+    Type: String
+
+Conditions:
+  CreateFargateService: !Not [!Equals [ !Ref DockerImage, '' ]]
+
+Resources:
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Condition: CreateFargateService
+    DependsOn:
+      - ServiceDatabasePassword
+      - LogGroup
+    Properties:
+      Family: !Join ['-', [!Ref EnvironmentName, !Ref ServiceName]]
+      # awsvpc is required for Fargate
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: 256
+      Memory: 0.5GB
+      ExecutionRoleArn: !Ref ExecutionRole
+      TaskRoleArn: !Ref ServiceTaskRole
+      ContainerDefinitions:
+        - Name: !Ref ServiceName
+          Image: !Ref DockerImage
+          PortMappings:
+            - ContainerPort: 80
+          StartTimeout: 30 # sec
+          Environment:
+            - Name: HELLO_BASE_PATH
+              Value: !Ref ServiceName
+            - Name: HELLO_POSTGRES_HOST
+              Value: !Ref DBHost
+            - Name: HELLO_POSTGRES_DB
+              Value: !Ref ServiceName
+            - Name: HELLO_POSTGRES_USER
+              Value: !Ref ServiceName
+            # TODO use SSN for security reasons?
+            - Name: HELLO_POSTGRES_PASSWORD
+              Value: !GetAtt ServiceDatabasePassword.Secret
+            # TODO move to parameter for stack to be service agnostic
+            - Name: HELLO_INSTALL_DB_EXTENSIONS
+              Value: false
+
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-region: !Ref AWS::Region
+              awslogs-group: !Ref LogGroup
+              awslogs-stream-prefix: ecs
+
+  ServiceTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Condition: CreateFargateService
+    Properties:
+      HealthCheckIntervalSeconds: 10
+      HealthCheckPath: !Sub "/${ServiceName}/debug/health"
+      HealthCheckTimeoutSeconds: 5
+      UnhealthyThresholdCount: 2
+      HealthyThresholdCount: 2
+      Name: !Join ['-', [!Ref EnvironmentName, !Ref ServiceName, tg]]
+      Port: 80
+      Protocol: HTTP
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: 30 # default is 300
+      TargetType: ip
+      VpcId: !Ref VPCId
+
+  ServiceListenerRule:
+    Type: 'AWS::ElasticLoadBalancingV2::ListenerRule'
+    Condition: CreateFargateService
+    Properties:
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref ServiceTargetGroup
+      Conditions:
+        - Field: path-pattern
+          PathPatternConfig:
+            Values:
+              - !Sub "/${ServiceName}*"
+      ListenerArn: !Ref LoadBalancerListener
+      Priority: 100
+
+
+  Service:
+    Type: AWS::ECS::Service
+    Condition: CreateFargateService
+    Properties:
+      ServiceName: !Ref ServiceName
+      Cluster: !Ref ECSCluster
+      LaunchType: FARGATE
+      TaskDefinition: !Ref TaskDefinition
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
+      DesiredCount: 2
+      # This may need to be adjusted if the container takes a while to start up
+      HealthCheckGracePeriodSeconds: 30
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          # TODO change to DISABLED and make sure, that pulling ECR image
+          # still works
+          AssignPublicIp: ENABLED
+          Subnets: !Split [',', !Ref SubnetIds]
+          SecurityGroups:
+            - !Ref ContainerSecurityGroup
+      LoadBalancers:
+        - ContainerName: !Ref ServiceName
+          ContainerPort: 80
+          TargetGroupArn: !Ref ServiceTargetGroup
+
+  ServiceDatabasePassword:
+    Type: Custom::Secret
+    Properties:
+      Name: !Sub "/${EnvironmentName}/postgres/${ServiceName}/PGPASSWORD"
+      KeyAlias: alias/aws/ssm
+      Alphabet: _`'~-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789
+      Length: 30
+      ServiceToken: !Ref SecretsProviderServiceToken
+      ReturnSecret: true
+
+
+  ServiceDB:
+    Type: Custom::PostgresDatabase
+    #Condition: ProvisionServiceDB
+    DependsOn:
+      - ServiceDatabasePassword
+    Properties:
+      ServiceToken: !Ref DatabaseProviderServiceToken
+      DatabaseName:  !Ref ServiceName
+      User:
+        Name: !Ref ServiceName
+        PasswordParameter: !Sub '/${EnvironmentName}/postgres/${ServiceName}/PGPASSWORD'
+      Connection:
+        User: root
+        PasswordParameter: !Sub '/${EnvironmentName}/postgres/root/PGPASSWORD'
+        Host: !Ref DBHost
+        Port: !Ref DBPort
+      Extensions:
+        - "uuid-ossp"
+
+
+  ECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Join ['/', [!Ref EnvironmentName, !Ref ServiceName]]
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Join ['', [/ecs/, !Ref EnvironmentName, !Ref ServiceName]]

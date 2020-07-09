@@ -9,6 +9,7 @@ require (
 	github.com/gofrs/uuid v3.2.0+incompatible
 	github.com/gorilla/mux v1.7.4
 	github.com/huandu/xstrings v1.3.2 // indirect
+	github.com/jackc/pgconn v1.6.1
 	github.com/jackc/pgx/v4 v4.7.0
 	github.com/jackc/tern v1.12.1
 	github.com/mitchellh/reflectwalk v1.0.1 // indirect

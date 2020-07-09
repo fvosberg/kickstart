@@ -1,0 +1,157 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+# TODO add a second service
+# TODO routing / DNS between services ( maybe need service discovery?: https://docs.aws.amazon.com/AmazonECS/latest/userguide/create-service-discovery.html)
+# TODO possibility to share ECR between stacks for staged environments like dev, test, prod
+
+Parameters:
+  ServiceName:
+    Type: String
+    Default: hello-gophers
+
+  HelloGophersImage:
+    Description: URL to the hello gophers image URL
+    Type: String
+    Default: ''
+
+  SecretProviderS3BucketPrefix:
+    Type: String
+    Default: 'binxio-public'
+  SecretProviderZipFileName:
+    Type: String
+    Default: 'lambdas/cfn-secret-provider-1.1.1.zip'
+  DatabaseProviderS3Bucket:
+    Type: String
+    MinLength: 1
+  DatabaseProviderZipFileName:
+    Type: String
+    MinLength: 1
+  ProvisionDB:
+    Type: String
+    Default: 'false'
+
+Resources:
+  VPCStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./vpc.yaml
+      Parameters:
+        EnvironmentName: !Ref "AWS::StackName"
+
+  SecretsProvider:
+    Type: AWS::CloudFormation::Stack
+    DependsOn:
+      - VPCStack
+    Properties:
+      TemplateURL: ./secrets-provider.yaml
+      Parameters:
+        EnvironmentName: !Ref "AWS::StackName"
+        VPCId: !GetAtt VPCStack.Outputs.VPC
+        S3BucketPrefix: !Ref SecretProviderS3BucketPrefix
+        ZipFileName: !Ref SecretProviderZipFileName
+
+  DatabaseProvider:
+    Type: AWS::CloudFormation::Stack
+    DependsOn:
+      - VPCStack
+      - MasterDBStack
+    Properties:
+      TemplateURL: ./database-provider.yaml
+      Parameters:
+        EnvironmentName: !Ref "AWS::StackName"
+        S3Bucket: !Ref DatabaseProviderS3Bucket
+        ZipFileName: !Ref DatabaseProviderZipFileName
+        VPCId: !GetAtt VPCStack.Outputs.VPC
+        SubnetIds: !GetAtt VPCStack.Outputs.PrivateSubnets
+        DatabaseSecurityGroupId: !GetAtt MasterDBStack.Outputs.SecurityGroupId
+
+  MasterDBStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn:
+      - VPCStack
+      - SecretsProvider
+    # TODO define master db super user password parameter
+    Properties:
+      TemplateURL: ./db.yaml
+      Parameters:
+        EnvironmentName: !Ref "AWS::StackName"
+        SubnetIds: !GetAtt VPCStack.Outputs.PublicSubnets
+        VPCId: !GetAtt VPCStack.Outputs.VPC
+        SecretsProviderServiceToken: !GetAtt SecretsProvider.Outputs.ServiceToken
+
+  ServicesBase:
+    Type: AWS::CloudFormation::Stack
+    DependsOn:
+      - VPCStack
+      - MasterDBStack
+    Properties:
+      TemplateURL: ./services-base.yaml
+      Parameters:
+        EnvironmentName: !Ref "AWS::StackName"
+        VPCId: !GetAtt VPCStack.Outputs.VPC
+        PublicSubnets: !GetAtt VPCStack.Outputs.PublicSubnets
+        DatabaseSecurityGroupId: !GetAtt MasterDBStack.Outputs.SecurityGroupId
+
+  HelloGophersService:
+    Type: AWS::CloudFormation::Stack
+    DependsOn:
+      - MasterDBStack
+      - ServicesBase
+      - DatabaseProvider
+      - SecretsProvider
+    Properties:
+      TemplateURL: ./service.yaml
+      Parameters:
+        ServiceName: hello-gophers
+        DockerImage: !Ref HelloGophersImage
+
+        EnvironmentName: !Ref "AWS::StackName"
+        # TODO SubnetIds: !GetAtt VPCStack.Outputs.PrivateSubnets
+        SubnetIds: !GetAtt VPCStack.Outputs.PublicSubnets
+        VPCId: !GetAtt VPCStack.Outputs.VPC
+        ExecutionRole: !GetAtt ServicesBase.Outputs.ExecutionRole
+        ServiceTaskRole: !GetAtt ServicesBase.Outputs.ServiceTaskRole
+        DBHost: !GetAtt MasterDBStack.Outputs.EndpointAddress
+        DBPort: !GetAtt MasterDBStack.Outputs.EndpointPort
+        LoadBalancerListener: !GetAtt ServicesBase.Outputs.LoadBalancerListener
+        ECSCluster: !GetAtt ServicesBase.Outputs.Cluster
+        ContainerSecurityGroup: !GetAtt ServicesBase.Outputs.ContainerSecurityGroup
+        SecretsProviderServiceToken: !GetAtt SecretsProvider.Outputs.ServiceToken
+        DatabaseProviderServiceToken: !GetAtt DatabaseProvider.Outputs.ServiceToken
+
+
+
+  # TODO how is the key used
+  Key:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: used for encryption of secrets in CloudFormation templates
+      Enabled: True
+      EnableKeyRotation: True
+      KeyPolicy:
+        Version: 2012-10-17
+        Id: 'enable iam permissions'
+        Statement:
+          - Sid: Enable IAM User Permissions
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: kms:*
+            Resource: '*'
+
+  KeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub "alias/${AWS::StackName}/cfn-secrets"
+      TargetKeyId: !GetAtt 'Key.Arn'
+
+
+Outputs:
+  VPC:
+    Description: A reference to the created VPC
+    Value: !GetAtt VPCStack.Outputs.VPC
+    Export:
+      Name: !Sub "${AWS::StackName}-VPCID"
+
+  LoadBalancerUrl:
+    Value: !GetAtt ServicesBase.Outputs.LoadBalancerUrl
