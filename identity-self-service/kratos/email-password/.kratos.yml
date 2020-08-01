@@ -1,0 +1,48 @@
+serve:
+  admin:
+    base_url: http://kratos:4434/
+
+selfservice:
+  strategies:
+    password:
+      enabled: true
+
+  flows:
+    settings:
+      privileged_session_max_age: 15m
+
+    recovery:
+      enabled: true
+
+    verification:
+      enabled: true
+
+    login:
+      request_lifespan: 10m
+
+    registration:
+      request_lifespan: 10m
+      after:
+        password:
+          hooks:
+            -
+              hook: session
+
+log:
+  level: debug
+
+secrets:
+  cookie:
+    # TODO generate?
+    - PLEASE-CHANGE-ME-I-AM-VERY-INSECURE
+
+hashers:
+  argon2:
+    parallelism: 1
+    memory: 131072
+    iterations: 2
+    salt_length: 16
+    key_length: 16
+
+identity:
+  default_schema_url: file:///etc/config/kratos/identity.traits.schema.json

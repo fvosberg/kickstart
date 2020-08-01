@@ -15,6 +15,8 @@ Parameters:
     Type: String
   DBHost:
     Type: String
+  DBPort:
+    Type: String
   LoadBalancerListener:
     Type: String
   ECSCluster:
@@ -23,14 +25,23 @@ Parameters:
     Type: String
   VPCId:
     Type: String
-  SubnetIds:
+  PrivateSubnetIds:
     Type: String
   SecretsProviderServiceToken:
     Type: String
   DatabaseProviderServiceToken:
     Type: String
-  DBPort:
+  EnvironmentVariables:
     Type: String
+  RouterPriority:
+    Type: Number
+  DiscoveryServiceArn:
+    Type: String
+  EnvironmentVariablesPrefix:
+    Type: String
+  Replicas:
+    Type: Number
+    Default: 2
 
 Conditions:
   CreateFargateService: !Not [!Equals [ !Ref DockerImage, '' ]]
@@ -59,18 +70,20 @@ Resources:
             - ContainerPort: 80
           StartTimeout: 30 # sec
           Environment:
-            - Name: HELLO_BASE_PATH
+            - Name: !Sub "${EnvironmentVariablesPrefix}_BASE_PATH"
               Value: !Ref ServiceName
             - Name: HELLO_POSTGRES_HOST
+            - Name: !Sub "${EnvironmentVariablesPrefix}_POSTGRES_HOST"
               Value: !Ref DBHost
-            - Name: HELLO_POSTGRES_DB
+            - Name: !Sub "${EnvironmentVariablesPrefix}_POSTGRES_DB"
               Value: !Ref ServiceName
-            - Name: HELLO_POSTGRES_USER
+            - Name: !Sub "${EnvironmentVariablesPrefix}_POSTGRES_USER"
               Value: !Ref ServiceName
             # TODO use SSN for security reasons?
-            - Name: HELLO_POSTGRES_PASSWORD
+            - Name: !Sub "${EnvironmentVariablesPrefix}_POSTGRES_PASSWORD"
               Value: !GetAtt ServiceDatabasePassword.Secret
             # TODO move to parameter for stack to be service agnostic
+            # TODO move this to additional environment variables
             - Name: HELLO_INSTALL_DB_EXTENSIONS
               Value: false
 
@@ -112,7 +125,7 @@ Resources:
             Values:
               - !Sub "/${ServiceName}*"
       ListenerArn: !Ref LoadBalancerListener
-      Priority: 100
+      Priority: !Ref RouterPriority
 
 
   Service:
@@ -126,14 +139,12 @@ Resources:
       DeploymentConfiguration:
         MinimumHealthyPercent: 100
         MaximumPercent: 200
-      DesiredCount: 2
+      DesiredCount: !Ref Replicas
       # This may need to be adjusted if the container takes a while to start up
       HealthCheckGracePeriodSeconds: 30
       NetworkConfiguration:
         AwsvpcConfiguration:
-          # TODO change to DISABLED and make sure, that pulling ECR image
-          # still works
-          AssignPublicIp: ENABLED
+          AssignPublicIp: DISABLED
           Subnets: !Split [',', !Ref SubnetIds]
           SecurityGroups:
             - !Ref ContainerSecurityGroup
@@ -141,13 +152,16 @@ Resources:
         - ContainerName: !Ref ServiceName
           ContainerPort: 80
           TargetGroupArn: !Ref ServiceTargetGroup
+      ServiceRegistries:
+        - RegistryArn: !Ref DiscoveryServiceArn
+          Port: 80
 
   ServiceDatabasePassword:
     Type: Custom::Secret
     Properties:
       Name: !Sub "/${EnvironmentName}/postgres/${ServiceName}/PGPASSWORD"
       KeyAlias: alias/aws/ssm
-      Alphabet: _`'~-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789
+      Alphabet: _-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789
       Length: 30
       ServiceToken: !Ref SecretsProviderServiceToken
       ReturnSecret: true
@@ -181,4 +195,4 @@ Resources:
   LogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Join ['', [/ecs/, !Ref EnvironmentName, !Ref ServiceName]]
+      LogGroupName: !Join ['/', [/ecs, !Ref EnvironmentName, !Ref ServiceName]]

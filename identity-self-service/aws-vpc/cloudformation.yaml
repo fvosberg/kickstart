@@ -1,0 +1,361 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Creates a fargate service with it's own db in the provided db instance
+
+Parameters:
+  EnvironmentName:
+    Description: An environment name that is prefixed to resource names
+    Type: String
+  ServiceName:
+    Type: String
+  ExecutionRole:
+    Type: String
+  ServiceTaskRole:
+    Type: String
+  DBHost:
+    Type: String
+  DBPort:
+    Type: String
+  LoadBalancerUrl:
+    Type: String
+  LoadBalancerListener:
+    Type: String
+  SecureLoadBalancerListener:
+    Type: String
+  ECSCluster:
+    Type: String
+  ContainerSecurityGroup:
+    Type: String
+  VPCId:
+    Type: String
+  PrivateSubnetIds:
+    Type: String
+  SecretsProviderServiceToken:
+    Type: String
+  DatabaseProviderServiceToken:
+    Type: String
+  RouterPriority:
+    Type: Number
+  PrivateNamespace:
+    Type: String
+  DockerImage:
+    Type: String
+    Description: The Docker image for kratos
+
+Conditions:
+  CreateKratosService: !Not [!Equals [ !Ref DockerImage, '' ]]
+
+Resources:
+  UITaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    DependsOn:
+      - KratosDatabasePassword
+      - UILogGroup
+    Properties:
+      Family: !Join ['-', [!Ref EnvironmentName, "kratos-ui"]]
+      # awsvpc is required for Fargate
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: 256
+      Memory: 0.5GB
+      ExecutionRoleArn: !Ref ExecutionRole
+      TaskRoleArn: !Ref ServiceTaskRole
+      ContainerDefinitions:
+        - Name: "kratos-ui"
+          Image: oryd/kratos-selfservice-ui-node:latest
+          PortMappings:
+            - ContainerPort: 80
+          StartTimeout: 30 # sec
+          Environment:
+            - Name: PORT
+              Value: 80
+            - Name: BASE_URL
+              Value: !Ref LoadBalancerUrl
+            - Name: SECURITY_MODE
+              Value: cookie
+            - Name: KRATOS_ADMIN_URL
+              Value: !Sub "http://kratos.svc.${EnvironmentName}.internal.:4434"
+            - Name: KRATOS_PUBLIC_URL
+              Value: !Sub "http://kratos.svc.${EnvironmentName}.internal."
+
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-region: !Ref AWS::Region
+              awslogs-group: !Ref UILogGroup
+              awslogs-stream-prefix: ecs
+
+  UIServiceTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 10
+      HealthCheckPath: "/health"
+      HealthCheckTimeoutSeconds: 5
+      UnhealthyThresholdCount: 2
+      HealthyThresholdCount: 2
+      Name: !Join ['-', [!Ref EnvironmentName, "kratos-ui", tg]]
+      Port: 80
+      Protocol: HTTP
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: 30 # default is 300
+      TargetType: ip
+      VpcId: !Ref VPCId
+
+  ServiceListenerRule:
+    Type: 'AWS::ElasticLoadBalancingV2::ListenerRule'
+    Properties:
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref UIServiceTargetGroup
+      Conditions:
+        - Field: path-pattern
+          PathPatternConfig:
+            Values:
+              - "*"
+      ListenerArn: !Ref SecureLoadBalancerListener
+      Priority: 1000
+
+  KratosAdminSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+        GroupDescription: SG for the ALB to access the services
+        VpcId: !Ref VPCId
+        SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 4434
+          ToPort: 4434
+          CidrIp: 0.0.0.0/0
+        SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  UIService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: kratos-ui
+      Cluster: !Ref ECSCluster
+      LaunchType: FARGATE
+      TaskDefinition: !Ref UITaskDefinition
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
+      DesiredCount: 2
+      # This may need to be adjusted if the container takes a while to start up
+      HealthCheckGracePeriodSeconds: 30
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          # TODO change to DISABLED and make sure, that pulling ECR image
+          # still works
+          #AssignPublicIp: ENABLED
+          AssignPublicIp: DISABLED
+          Subnets: !Split [',', !Ref PrivateSubnetIds]
+          SecurityGroups:
+            - !Ref ContainerSecurityGroup
+            - !Ref KratosAdminSecurityGroup
+      LoadBalancers:
+        - ContainerName: kratos-ui
+          ContainerPort: 80
+          TargetGroupArn: !Ref UIServiceTargetGroup
+
+  KratosService:
+    Type: AWS::ECS::Service
+    Condition: CreateKratosService
+    DependsOn:
+      - KratosDiscoveryService
+    Properties:
+      ServiceName: kratos
+      Cluster: !Ref ECSCluster
+      LaunchType: FARGATE
+      TaskDefinition: !Ref KratosTaskDefinition
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
+      DesiredCount: 2
+      # This may need to be adjusted if the container takes a while to start up
+      HealthCheckGracePeriodSeconds: 30
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          # TODO change to DISABLED and make sure, that pulling ECR image
+          # still works
+          #AssignPublicIp: ENABLED
+          AssignPublicIp: DISABLED
+          Subnets: !Split [',', !Ref PrivateSubnetIds]
+          SecurityGroups:
+            - !Ref ContainerSecurityGroup
+            - !Ref KratosAdminSecurityGroup
+      LoadBalancers:
+        - ContainerName: kratos
+          ContainerPort: 80
+          TargetGroupArn: !Ref KratosServiceTargetGroup
+      ServiceRegistries:
+        - RegistryArn: !GetAtt KratosDiscoveryService.Arn
+          Port: 80
+
+  KratosDiscoveryService:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      Description: !Sub "Discovery Service for the ${EnvironmentName}/kratos service"
+      DnsConfig:
+        RoutingPolicy: MULTIVALUE
+        DnsRecords:
+          - TTL: 60
+            Type: A
+          - TTL: 60
+            Type: SRV
+      HealthCheckCustomConfig:
+        FailureThreshold: 1
+      Name: kratos
+      NamespaceId: !Ref PrivateNamespace
+
+  KratosTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Condition: CreateKratosService
+    DependsOn:
+      - KratosDatabasePassword
+      - KratosLogGroup
+    Properties:
+      Family: !Join ['-', [!Ref EnvironmentName, "kratos"]]
+      # awsvpc is required for Fargate
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: 256
+      Memory: 0.5GB
+      ExecutionRoleArn: !Ref ExecutionRole
+      TaskRoleArn: !Ref ServiceTaskRole
+      ContainerDefinitions:
+        - Name: "kratos"
+          Image: !Ref DockerImage
+          PortMappings:
+            - ContainerPort: 80
+            - ContainerPort: 4434
+          StartTimeout: 30 # sec
+          Environment:
+            - Name: SERVE_ADMIN_PORT
+              Value: 4434
+            - Name: SERVE_ADMIN_BASE_URL
+              Value: !Sub "http://kratos.svc.${EnvironmentName}.internal."
+            - Name: SERVE_PUBLIC_PORT
+              Value: 80
+            - Name: SERVE_PUBLIC_BASE_URL
+              Value: !Sub "${LoadBalancerUrl}/.ory/kratos/public"
+            - Name: DSN
+              Value: !Join ["", ["postgres://kratos:", !GetAtt KratosDatabasePassword.Secret, "@", !Ref DBHost, ":", !Ref DBPort, "/kratos?sslmode=disable&max_conns=20&max_idle_conns=4"]]
+            - Name: LOG_LEVEL
+              Value: debug
+            - Name: URLS_LOGIN_UI
+              Value: !Sub "${LoadBalancerUrl}/auth/login"
+            - Name: URLS_REGISTRATION_UI
+              Value: !Sub "${LoadBalancerUrl}/auth/registration"
+                # TODO ssl_verify doesn't work in AWS for now - add certificates to the container?
+            - Name: COURIER_SMTP_CONNECTION_URI
+              Value: "smtps://noreply%40aws-thesis.frederikvosberg.de:BachelorThesis2020@sslout.df.eu:465/?skip_ssl_verify=true"
+            - Name: COURIER_SMTP_FROM_ADDRESS
+              Value: "noreply@frederikvosberg.de"
+            # TODO FROM ADDRESS configurable
+            - Name: URLS_WHITELISTED_RETURN_TO_URLS
+              Value: !Sub "${LoadBalancerUrl}"
+            - Name: SELFSERVICE_DEFAULT_BROWSER_RETURN_URL
+              Value: !Sub "${LoadBalancerUrl}"
+            - Name: SELFSERVICE_WHITELISTED_RETURN_URLS
+              Value: !Sub "${LoadBalancerUrl}"
+            - Name: SELFSERVICE_FLOWS_REGISTRATION_UI_URL
+              Value: !Sub "${LoadBalancerUrl}/auth/registration"
+            - Name: SELFSERVICE_FLOWS_LOGIN_UI_URL
+              Value: !Sub "${LoadBalancerUrl}/auth/login"
+            - Name: SELFSERVICE_FLOWS_LOGOUT_AFTER_DEFAULT_BROWSER_RETURN_URL
+              Value: !Sub "${LoadBalancerUrl}/auth/login"
+            - Name: SELFSERVICE_FLOWS_RECOVERY_UI_URL
+              Value: !Sub "${LoadBalancerUrl}/recovery"
+            - Name: SELFSERVICE_FLOWS_VERIFICATION_UI_URL
+              Value: !Sub "${LoadBalancerUrl}/recovery"
+            - Name: SELFSERVICE_FLOWS_VERIFICATION_AFTER_DEFAULT_BROWSER_RETURN_URL
+              Value: !Sub "${LoadBalancerUrl}"
+            - Name: SELFSERVICE_FLOWS_SETTINGS_UI_URL
+              Value: !Sub "${LoadBalancerUrl}/settings"
+
+
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-region: !Ref AWS::Region
+              awslogs-group: !Ref KratosLogGroup
+              awslogs-stream-prefix: ecs
+
+  KratosServiceTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 10
+      HealthCheckPath: "/health/alive"
+      HealthCheckTimeoutSeconds: 5
+      UnhealthyThresholdCount: 2
+      HealthyThresholdCount: 2
+      Name: !Join ['-', [!Ref EnvironmentName, "kratos", tg]]
+      Port: 80
+      Protocol: HTTP
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: 30 # default is 300
+      TargetType: ip
+      VpcId: !Ref VPCId
+
+  KratosListenerRule:
+    Type: 'AWS::ElasticLoadBalancingV2::ListenerRule'
+    Properties:
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref KratosServiceTargetGroup
+      Conditions:
+        - Field: path-pattern
+          PathPatternConfig:
+            Values:
+              - "/kratos*"
+      ListenerArn: !Ref SecureLoadBalancerListener
+      Priority: 900
+
+  KratosDatabasePassword:
+    Type: Custom::Secret
+    Properties:
+      Name: !Sub "/${EnvironmentName}/postgres/kratos/PGPASSWORD"
+      KeyAlias: alias/aws/ssm
+      Alphabet: _~-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789
+      Length: 30
+      ServiceToken: !Ref SecretsProviderServiceToken
+      ReturnSecret: true
+
+
+  KratosDB:
+    Type: Custom::PostgresDatabase
+    DependsOn:
+      - KratosDatabasePassword
+    Properties:
+      ServiceToken: !Ref DatabaseProviderServiceToken
+      DatabaseName:  kratos
+      User:
+        Name: kratos
+        PasswordParameter: !Sub '/${EnvironmentName}/postgres/kratos/PGPASSWORD'
+      Connection:
+        User: root
+        PasswordParameter: !Sub '/${EnvironmentName}/postgres/root/PGPASSWORD'
+        Host: !Ref DBHost
+        Port: !Ref DBPort
+      Extensions:
+        # TODO needed?
+        - "uuid-ossp"
+
+
+  ECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Join ['/', [!Ref EnvironmentName, "kratos"]]
+
+  UILogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Join ['/', [/ecs, !Ref EnvironmentName, "kratos-ui"]]
+
+  KratosLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Join ['/', [/ecs, !Ref EnvironmentName, "kratos"]]

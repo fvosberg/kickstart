@@ -7,19 +7,22 @@ Parameters:
     Type: String
   SubnetIds:
     Type: String
-    MinLength: 1
+    Default: ""
   VPCId:
     Type: String
-    MinLength: 1
+    Default: ""
   SecretsProviderServiceToken:
     Type: String
+
+Conditions:
+  HasSubnets: !Not [ !Equals [ !Ref SubnetIds, "" ] ]
+  HasVPC: !Not [ !Equals [ !Ref VPCId, "" ] ]
 
 Resources:
   MasterDB:
     Type: AWS::RDS::DBInstance
     DependsOn:
       - SecurityGroup
-      - MasterDBSubnetGroup
       - SuperUserPassword
     Properties:
       AllocatedStorage: '5'
@@ -30,7 +33,7 @@ Resources:
       DBName: root
       MasterUsername: root
       MasterUserPassword: !GetAtt SuperUserPassword.Secret
-      DBSubnetGroupName: !Ref MasterDBSubnetGroup
+      DBSubnetGroupName: !If [ HasSubnets, !Ref MasterDBSubnetGroup, !Ref "AWS::NoValue" ]
       PubliclyAccessible: true # Protected by security group - for public access add your IP to the sg in an inbound rule
       VPCSecurityGroups:
         - !GetAtt SecurityGroup.GroupId
@@ -46,6 +49,7 @@ Resources:
 
   MasterDBSubnetGroup:
     Type: "AWS::RDS::DBSubnetGroup"
+    Condition: HasSubnets
     Properties:
       DBSubnetGroupDescription: "Subnet Group for VPC"
       SubnetIds: !Split [',', !Ref SubnetIds]
@@ -54,7 +58,7 @@ Resources:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: SG for the database
-      VpcId: !Ref VPCId
+      VpcId: !If [ HasVPC, !Ref VPCId, !Ref "AWS::NoValue" ]
 
   SuperUserPassword:
     Type: Custom::Secret

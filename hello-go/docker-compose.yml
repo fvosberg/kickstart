@@ -16,5 +16,8 @@ services:
       - "80:80" # public
     restart: unless-stopped
     environment:
-      - HELLO_POSTGRES_DSN=postgres://gopher:secret@postgresd:5432/hello-go?sslmode=disable
+      - HELLO_POSTGRES_DB=hello-go
+      - HELLO_POSTGRES_USER=gopher
+      - HELLO_POSTGRES_PASSWORD=secret
+      - HELLO_POSTGRES_URL=postgresd:5432
       - HELLO_PORT=80

@@ -6,7 +6,7 @@ Parameters:
     Description: An environment name that is prefixed to resource names
     Type: String
     MinLength: 1
-  S3BucketPrefix:
+  S3Bucket:
     Type: String
     MinLength: 1
   ZipFileName:
@@ -14,31 +14,63 @@ Parameters:
     MinLength: 1
   VPCId:
     Type: String
+    Default: ""
+  SubnetIds:
+    Type: String
+    Default: ""
+  DatabaseSecurityGroupId:
+    Type: String
+    MinLength: 1
+
+Conditions:
+  HasSubnets: !Not [ !Equals [ !Ref SubnetIds, "" ] ]
+  HasVPC: !Not [ !Equals [ !Ref VPCId, "" ] ]
 
 Resources:
-  SecretsProvider:
+  DatabaseProvider:
     Type: AWS::Lambda::Function
     DependsOn:
       - LambdaRole
       - LambdaPolicy
+      - SecurityGroup
     Properties:
-      Description: CloudFormation Custom:Secret implementation
+      Description: CloudFormation Custom:PostgresDatabase implementation
       Code:
-        S3Bucket: !Sub '${S3BucketPrefix}-${AWS::Region}'
+        S3Bucket: !Ref S3Bucket
         S3Key: !Ref ZipFileName
-      FunctionName: !Sub '${EnvironmentName}-binxio-secret-provider'
-      Handler: secrets.handler
-      MemorySize: 128
-      Timeout: 30
+      FunctionName: !Sub '${EnvironmentName}-postgres-db-provider'
       Role: !GetAtt LambdaRole.Arn
-      Runtime: python3.7
+      Runtime: go1.x
+      Handler: main
+      MemorySize: 128
+      Timeout: 10
+      VpcConfig:
+        SecurityGroupIds:
+          - !GetAtt SecurityGroup.GroupId
+        SubnetIds: !If [ HasSubnets, !Split [',', !Ref SubnetIds], !Ref "AWS::NoValue" ]
 
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: SG for the database
+      VpcId: !If [ HasVPC, !Ref VPCId, !Ref "AWS::NoValue" ]
+
+  DatabaseAccessSecurityGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref DatabaseSecurityGroupId
+      IpProtocol: tcp
+      FromPort: '5432'
+      ToPort: '5432'
+      SourceSecurityGroupId: !GetAtt SecurityGroup.GroupId
+
+  # TODO restrict to needed access
   LambdaPolicy:
     Type: AWS::IAM::Policy
     DependsOn:
       - LambdaRole
     Properties:
-      PolicyName: !Sub "${EnvironmentName}-SecretProviderPolicy"
+      PolicyName: !Sub "${EnvironmentName}-CustomResourceProviderPolicy"
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -84,7 +116,8 @@ Resources:
             Principal:
               Service:
                 - lambda.amazonaws.com
-
 Outputs:
   ServiceToken:
-    Value: !GetAtt SecretsProvider.Arn
+    Value: !GetAtt DatabaseProvider.Arn
+  DatabaseProviderArn:
+    Value: !GetAtt DatabaseProvider.Arn

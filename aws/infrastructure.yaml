@@ -8,12 +8,6 @@ Parameters:
   ServiceName:
     Type: String
     Default: hello-gophers
-
-  HelloGophersImage:
-    Description: URL to the hello gophers image URL
-    Type: String
-    Default: ''
-
   SecretProviderS3BucketPrefix:
     Type: String
     Default: 'binxio-public'
@@ -26,34 +20,22 @@ Parameters:
   DatabaseProviderZipFileName:
     Type: String
     MinLength: 1
-  ProvisionDB:
+  SSLCertificateArn:
     Type: String
-    Default: 'false'
 
 Resources:
-  VPCStack:
-    Type: AWS::CloudFormation::Stack
-    Properties:
-      TemplateURL: ./vpc.yaml
-      Parameters:
-        EnvironmentName: !Ref "AWS::StackName"
-
   SecretsProvider:
     Type: AWS::CloudFormation::Stack
-    DependsOn:
-      - VPCStack
     Properties:
       TemplateURL: ./secrets-provider.yaml
       Parameters:
         EnvironmentName: !Ref "AWS::StackName"
-        VPCId: !GetAtt VPCStack.Outputs.VPC
         S3BucketPrefix: !Ref SecretProviderS3BucketPrefix
         ZipFileName: !Ref SecretProviderZipFileName
 
   DatabaseProvider:
     Type: AWS::CloudFormation::Stack
     DependsOn:
-      - VPCStack
       - MasterDBStack
     Properties:
       TemplateURL: ./database-provider.yaml
@@ -61,65 +43,29 @@ Resources:
         EnvironmentName: !Ref "AWS::StackName"
         S3Bucket: !Ref DatabaseProviderS3Bucket
         ZipFileName: !Ref DatabaseProviderZipFileName
-        VPCId: !GetAtt VPCStack.Outputs.VPC
-        SubnetIds: !GetAtt VPCStack.Outputs.PrivateSubnets
         DatabaseSecurityGroupId: !GetAtt MasterDBStack.Outputs.SecurityGroupId
 
   MasterDBStack:
     Type: AWS::CloudFormation::Stack
     DependsOn:
-      - VPCStack
       - SecretsProvider
     # TODO define master db super user password parameter
     Properties:
       TemplateURL: ./db.yaml
       Parameters:
         EnvironmentName: !Ref "AWS::StackName"
-        SubnetIds: !GetAtt VPCStack.Outputs.PublicSubnets
-        VPCId: !GetAtt VPCStack.Outputs.VPC
         SecretsProviderServiceToken: !GetAtt SecretsProvider.Outputs.ServiceToken
 
   ServicesBase:
     Type: AWS::CloudFormation::Stack
     DependsOn:
-      - VPCStack
       - MasterDBStack
     Properties:
       TemplateURL: ./services-base.yaml
       Parameters:
         EnvironmentName: !Ref "AWS::StackName"
-        VPCId: !GetAtt VPCStack.Outputs.VPC
-        PublicSubnets: !GetAtt VPCStack.Outputs.PublicSubnets
         DatabaseSecurityGroupId: !GetAtt MasterDBStack.Outputs.SecurityGroupId
-
-  HelloGophersService:
-    Type: AWS::CloudFormation::Stack
-    DependsOn:
-      - MasterDBStack
-      - ServicesBase
-      - DatabaseProvider
-      - SecretsProvider
-    Properties:
-      TemplateURL: ./service.yaml
-      Parameters:
-        ServiceName: hello-gophers
-        DockerImage: !Ref HelloGophersImage
-
-        EnvironmentName: !Ref "AWS::StackName"
-        # TODO SubnetIds: !GetAtt VPCStack.Outputs.PrivateSubnets
-        SubnetIds: !GetAtt VPCStack.Outputs.PublicSubnets
-        VPCId: !GetAtt VPCStack.Outputs.VPC
-        ExecutionRole: !GetAtt ServicesBase.Outputs.ExecutionRole
-        ServiceTaskRole: !GetAtt ServicesBase.Outputs.ServiceTaskRole
-        DBHost: !GetAtt MasterDBStack.Outputs.EndpointAddress
-        DBPort: !GetAtt MasterDBStack.Outputs.EndpointPort
-        LoadBalancerListener: !GetAtt ServicesBase.Outputs.LoadBalancerListener
-        ECSCluster: !GetAtt ServicesBase.Outputs.Cluster
-        ContainerSecurityGroup: !GetAtt ServicesBase.Outputs.ContainerSecurityGroup
-        SecretsProviderServiceToken: !GetAtt SecretsProvider.Outputs.ServiceToken
-        DatabaseProviderServiceToken: !GetAtt DatabaseProvider.Outputs.ServiceToken
-
-
+        SSLCertificateArn: !Ref SSLCertificateArn
 
   # TODO how is the key used
   Key:
@@ -145,13 +91,28 @@ Resources:
       AliasName: !Sub "alias/${AWS::StackName}/cfn-secrets"
       TargetKeyId: !GetAtt 'Key.Arn'
 
-
 Outputs:
-  VPC:
-    Description: A reference to the created VPC
-    Value: !GetAtt VPCStack.Outputs.VPC
-    Export:
-      Name: !Sub "${AWS::StackName}-VPCID"
-
   LoadBalancerUrl:
     Value: !GetAtt ServicesBase.Outputs.LoadBalancerUrl
+  ServiceExecutionRole:
+    Value: !GetAtt ServicesBase.Outputs.ExecutionRole
+  ServiceTaskRole:
+    Value: !GetAtt ServicesBase.Outputs.ServiceTaskRole
+  DBHost:
+    Value: !GetAtt MasterDBStack.Outputs.EndpointAddress
+  DBPort:
+    Value: !GetAtt MasterDBStack.Outputs.EndpointPort
+  LoadBalancerListener:
+    Value: !GetAtt ServicesBase.Outputs.LoadBalancerListener
+  SecureLoadBalancerListener:
+    Value: !GetAtt ServicesBase.Outputs.SecureLoadBalancerListener
+  ECSCluster:
+    Value: !GetAtt ServicesBase.Outputs.Cluster
+  ContainerSecurityGroup:
+    Value: !GetAtt ServicesBase.Outputs.ContainerSecurityGroup
+  SecretsProviderServiceToken:
+    Value: !GetAtt SecretsProvider.Outputs.ServiceToken
+  DatabaseProviderServiceToken:
+    Value: !GetAtt DatabaseProvider.Outputs.ServiceToken
+  PrivateNamespace:
+    Value: !GetAtt ServicesBase.Outputs.PrivateNamespace

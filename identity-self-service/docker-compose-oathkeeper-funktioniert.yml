@@ -1,0 +1,119 @@
+version: '3.7'
+
+# mit quickstart ans Laufen bekommen
+# mit gebauten docker images ans laufen bekommen
+# Mit traefik davor ans Laufen bekommen
+#     thesis.frederikvosberg.local > oathkeeper:4455 (alls umkonfigurieren?, aber nur per ENV? > dann wieder standardimages?)
+#     api.thesis.frederikvosberg.local > oathkeeper:4456
+#     keine anderen ports mehr freigeben
+
+services:
+  reverse-proxy:
+    # The official v2 Traefik docker image
+    image: traefik:v2.2
+    # Enables the web UI and tells Traefik to listen to docker
+    command:
+      - --api.debug
+      - --api.insecure=true
+      - --providers.docker
+      - --entryPoints.web.address=:80
+      - --entryPoints.websecure.address=:443
+      - --log.level=debug
+      - --log.format=json
+    ports:
+      # The HTTP port
+      - "80:80"
+      - "443:443"
+      # The Web UI (enabled by --api.insecure=true)
+      - "8080:8080"
+    volumes:
+      # So that Traefik can listen to the Docker events
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  oathkeeper:
+    image: oryd/oathkeeper:v0.38
+    labels:
+        - traefik.http.routers.oathkeeper.rule=Host(`thesis.frederikvosberg.local`)
+        - traefik.http.services.oathkeeper.loadbalancer.server.port=4455
+    depends_on:
+      - kratos
+    ports:
+      - 4455:4455
+      - 4456:4456
+    command:
+      serve proxy -c "/etc/config/oathkeeper/.oathkeeper.yml"
+    environment:
+      - LOG_LEVEL=debug
+    restart: on-failure
+    volumes:
+      - ./oathkeeper:/etc/config/oathkeeper
+
+  postgresd:
+    image: postgres:9.6
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=kratos
+      - POSTGRES_PASSWORD=secret
+      - POSTGRES_DB=kratos
+
+  kratos:
+    image: kratos:local
+    depends_on:
+      - postgresd
+      - mailhog
+    restart: unless-stopped
+    environment:
+      - SERVE_ADMIN_PORT=4434
+      - SERVE_ADMIN_BASE_URL=http://kratos
+      - SERVE_PUBLIC_PORT=4433
+      - SERVE_PUBLIC_BASE_URL=http://thesis.frederikvosberg.local/.ory/kratos/public/
+      - DSN=postgres://kratos:secret@postgresd:5432/kratos?sslmode=disable&max_conns=20&max_idle_conns=4
+      - LOG_LEVEL=debug
+      - URLS_LOGIN_UI=http://thesis.frederikvosberg.local/auth/login
+      - URLS_REGISTRATION_UI=http://thesis.frederikvosberg.local/auth/registration
+      - COURIER_SMTP_CONNECTION_URI=smtp://test:test@mailhog:1025/?skip_ssl_verify=true
+      - URLS_WHITELISTED_RETURN_TO_URLS=http://thesis.frederikvosberg.local
+      - SELFSERVICE_DEFAULT_BROWSER_RETURN_URL=http://thesis.frederikvosberg.local
+      - SELFSERVICE_WHITELISTED_RETURN_URLS=http://thesis.frederikvosberg.local
+      - LOG_LEAK_SENSITIVE_VALUES=true
+      - SELFSERVICE_FLOWS_REGISTRATION_UI_URL=http://thesis.frederikvosberg.local/auth/registration
+      - SELFSERVICE_FLOWS_LOGIN_UI_URL=http://thesis.frederikvosberg.local/auth/login
+      - SELFSERVICE_FLOWS_LOGOUT_AFTER_DEFAULT_BROWSER_RETURN_URL=http://thesis.frederikvosberg.local/auth/login
+      - SELFSERVICE_FLOWS_RECOVERY_UI_URL=http://thesis.frederikvosberg.local/recovery
+      - SELFSERVICE_FLOWS_VERIFICATION_UI_URL=http://thesis.frederikvosberg.local/recovery
+      - SELFSERVICE_FLOWS_VERIFICATION_AFTER_DEFAULT_BROWSER_RETURN_URL=http://thesis.frederikvosberg.local
+      - SELFSERVICE_FLOWS_SETTINGS_UI_URL=http://thesis.frederikvosberg.local/settings
+
+  kratos-ui:
+    image: oryd/kratos-selfservice-ui-node:latest
+    environment:
+      - KRATOS_PUBLIC_URL=http://kratos:4433/
+      - KRATOS_ADMIN_URL=http://kratos:4434/
+      - PORT=4435
+      - KRATOS_BROWSER_URL=http://thesis.frederikvosberg.local/.ory/kratos/public
+      - JWKS_URL=http://oathkeeper:4456/.well-known/jwks.json
+      - SECURITY_MODE=jwks
+    restart: on-failure
+
+  mailhog:
+    image: mailhog/mailhog
+    labels:
+      # doesn't work for now TODO
+      - traefik.http.routers.mailhog.rule=Host(`mailhog.thesis.frederikvosberg.local`)
+      - traefik.http.middlewares.mailhog-redirectscheme.redirectscheme.scheme=http
+      - traefik.http.middlewares.mailhog-redirectscheme.redirectscheme.port=8025
+      - traefik.http.routers.mailhog.middlewares=mailhog-redirectscheme@docker
+    expose:
+      - 1025
+    ports:
+      - "8025:8025"
+
+  postgresd:
+    image: postgres:12.3
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=kratos
+      - POSTGRES_PASSWORD=secret
+      - POSTGRES_DB=kratos

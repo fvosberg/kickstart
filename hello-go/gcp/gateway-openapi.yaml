@@ -1,0 +1,31 @@
+  swagger: '2.0'
+  info:
+    title: Cloud Endpoints for the hello-go project
+    description: All routes have to be added to this document
+    version: 1.0.0
+  host: gateway-xm2ikhjgta-ew.a.run.app
+  schemes:
+    - https
+  produces:
+    - application/json
+  x-google-backend:
+    address: https://hello-go-xm2ikhjgta-ew.a.run.app
+    protocol: h2
+  paths:
+    /hello-gophers:
+      get:
+        summary: Get greetings
+        operationId: hello-gophers-list-greetings
+        responses:
+          '200':
+            description: A list of the greetings
+            schema:
+              type: string
+      post:
+        summary: Create Greeting
+        operationId: hello-gophers-create-greetings
+        responses:
+          '201':
+            description: Successful created a greeting
+            schema:
+              type: string

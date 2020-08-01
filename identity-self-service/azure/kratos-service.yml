@@ -1,0 +1,78 @@
+additional_properties: {}
+apiVersion: '2018-10-01'
+identity: null
+location: westeurope
+name: kratos
+properties:
+  containers:
+  - name: kratos
+    properties:
+      command: []
+      environmentVariables:
+      - name: LOG_LEVEL
+        value: debug
+      - name: SELFSERVICE_FLOWS_SETTINGS_UI_URL
+        value: http://kratos-ui-thesis.westeurope.azurecontainer.io/settings
+      - name: SELFSERVICE_FLOWS_REGISTRATION_UI_URL
+        value: http://kratos-ui-thesis.westeurope.azurecontainer.io/auth/registration
+      - name: SERVE_ADMIN_BASE_URL
+        value: http://kratos-thesis.westeurope.azurecontainer.io
+      - name: SELFSERVICE_DEFAULT_BROWSER_RETURN_URL
+        value: http://kratos-ui-thesis.westeurope.azurecontainer.io
+      - name: SERVE_ADMIN_PORT
+        value: '4434'
+      - name: SERVE_PUBLIC_BASE_URL
+        value: http://kratos-ui-thesis.westeurope.azurecontainer.io/.ory/kratos/public/
+      - name: SELFSERVICE_FLOWS_VERIFICATION_AFTER_DEFAULT_BROWSER_RETURN_URL
+        value: http://kratos-ui-thesis.westeurope.azurecontainer.io
+      - name: DSN
+        value: postgres://psqladminun%40main-postgres:H%40Sh1CoR3%21@main-postgres.postgres.database.azure.com:5432/kratos
+      - name: SELFSERVICE_FLOWS_VERIFICATION_UI_URL
+        value: http://kratos-ui-thesis.westeurope.azurecontainer.io/recovery
+      - name: SELFSERVICE_FLOWS_LOGIN_UI_URL
+        value: http://kratos-ui-thesis.westeurope.azurecontainer.io/auth/login
+      - name: SELFSERVICE_WHITELISTED_RETURN_URLS
+        value: http://kratos-ui-thesis.westeurope.azurecontainer.io
+      - name: URLS_REGISTRATION_UI
+        value: http://kratos-ui-thesis.westeurope.azurecontainer.io/auth/registration
+      - name: URLS_LOGIN_UI
+        value: http://kratos-ui-thesis.westeurope.azurecontainer.io/auth/login
+      - name: SERVE_PUBLIC_PORT
+        value: '4455'
+      - name: SELFSERVICE_FLOWS_RECOVERY_UI_URL
+        value: http://kratos-ui-thesis.westeurope.azurecontainer.io/recovery
+      - name: URLS_WHITELISTED_RETURN_TO_URLS
+        value: http://kratos-ui-thesis.westeurope.azurecontainer.io
+      - name: SELFSERVICE_FLOWS_LOGOUT_AFTER_DEFAULT_BROWSER_RETURN_URL
+        value: http://kratos-ui-thesis.westeurope.azurecontainer.io/auth/login
+      - name: COURIER_SMTP_CONNECTION_URI
+        value: smtps://noreply%40aws-thesis.frederikvosberg.de:BachelorThesis2020@sslout.df.eu:465
+      image: thesis.azurecr.io/thesis/kratos
+      ports:
+      - port: 4434
+        protocol: TCP
+      - port: 4455
+        protocol: TCP
+      resources:
+        requests:
+          cpu: 1.0
+          memoryInGB: 0.5
+  imageRegistryCredentials:
+  - server: thesis.azurecr.io
+    username: 673169e3-9882-4986-aa71-d8e9c084f743
+    password: KcA8ltnhcElhg9Am~PFDnjDkk3Yp_sO~ba
+  ipAddress:
+    dnsNameLabel: kratos-thesis
+    fqdn: kratos-thesis.westeurope.azurecontainer.io
+    ip: 51.138.45.180
+    ports:
+    - port: 4434
+      protocol: TCP
+    - port: 4455
+      protocol: TCP
+    type: Public
+  osType: Linux
+  restartPolicy: Always
+tags:
+  environment: testing
+type: Microsoft.ContainerInstance/containerGroups

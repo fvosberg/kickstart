@@ -1,0 +1,150 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+# TODO add a second service
+# TODO routing / DNS between services ( maybe need service discovery?: https://docs.aws.amazon.com/AmazonECS/latest/userguide/create-service-discovery.html)
+# TODO possibility to share ECR between stacks for staged environments like dev, test, prod
+
+Parameters:
+  ServiceName:
+    Type: String
+    Default: hello-gophers
+  SecretProviderS3BucketPrefix:
+    Type: String
+    Default: 'binxio-public'
+  SecretProviderZipFileName:
+    Type: String
+    Default: 'lambdas/cfn-secret-provider-1.1.1.zip'
+  DatabaseProviderS3Bucket:
+    Type: String
+    MinLength: 1
+  DatabaseProviderZipFileName:
+    Type: String
+    MinLength: 1
+  SSLCertificateArn:
+    Type: String
+
+Resources:
+  VPCStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./vpc.yaml
+      Parameters:
+        EnvironmentName: !Ref "AWS::StackName"
+
+  SecretsProvider:
+    Type: AWS::CloudFormation::Stack
+    DependsOn:
+      - VPCStack
+    Properties:
+      TemplateURL: ./secrets-provider.yaml
+      Parameters:
+        EnvironmentName: !Ref "AWS::StackName"
+        S3BucketPrefix: !Ref SecretProviderS3BucketPrefix
+        ZipFileName: !Ref SecretProviderZipFileName
+
+  DatabaseProvider:
+    Type: AWS::CloudFormation::Stack
+    DependsOn:
+      - VPCStack
+      - MasterDBStack
+    Properties:
+      TemplateURL: ./database-provider.yaml
+      Parameters:
+        EnvironmentName: !Ref "AWS::StackName"
+        S3Bucket: !Ref DatabaseProviderS3Bucket
+        ZipFileName: !Ref DatabaseProviderZipFileName
+        VPCId: !GetAtt VPCStack.Outputs.VPC
+        SubnetIds: !GetAtt VPCStack.Outputs.PrivateSubnets
+        DatabaseSecurityGroupId: !GetAtt MasterDBStack.Outputs.SecurityGroupId
+
+  MasterDBStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn:
+      - VPCStack
+      - SecretsProvider
+    # TODO define master db super user password parameter
+    Properties:
+      TemplateURL: ./db.yaml
+      Parameters:
+        EnvironmentName: !Ref "AWS::StackName"
+        SubnetIds: !GetAtt VPCStack.Outputs.PublicSubnets
+        VPCId: !GetAtt VPCStack.Outputs.VPC
+        SecretsProviderServiceToken: !GetAtt SecretsProvider.Outputs.ServiceToken
+
+  ServicesBase:
+    Type: AWS::CloudFormation::Stack
+    DependsOn:
+      - VPCStack
+      - MasterDBStack
+    Properties:
+      TemplateURL: ./services-base.yaml
+      Parameters:
+        EnvironmentName: !Ref "AWS::StackName"
+        VPCId: !GetAtt VPCStack.Outputs.VPC
+        SubnetIds: !GetAtt VPCStack.Outputs.PublicSubnets
+        DatabaseSecurityGroupId: !GetAtt MasterDBStack.Outputs.SecurityGroupId
+        SSLCertificateArn: !Ref SSLCertificateArn
+
+  # TODO how is the key used
+  Key:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: used for encryption of secrets in CloudFormation templates
+      Enabled: True
+      EnableKeyRotation: True
+      KeyPolicy:
+        Version: 2012-10-17
+        Id: 'enable iam permissions'
+        Statement:
+          - Sid: Enable IAM User Permissions
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: kms:*
+            Resource: '*'
+
+  KeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub "alias/${AWS::StackName}/cfn-secrets"
+      TargetKeyId: !GetAtt 'Key.Arn'
+
+Outputs:
+  VPC:
+    Description: A reference to the created VPC
+    Value: !GetAtt VPCStack.Outputs.VPC
+    Export:
+      Name: !Sub "${AWS::StackName}-VPCID"
+
+  LoadBalancerUrl:
+    Value: !GetAtt ServicesBase.Outputs.LoadBalancerUrl
+  ServiceSubnetIds:
+    Value: !GetAtt VPCStack.Outputs.PublicSubnets
+  PublicSubnetIds:
+    Value: !GetAtt VPCStack.Outputs.PublicSubnets
+  PrivateSubnetIds:
+    Value: !GetAtt VPCStack.Outputs.PrivateSubnets
+  VPCId:
+    Value: !GetAtt VPCStack.Outputs.VPC
+  ServiceExecutionRole:
+    Value: !GetAtt ServicesBase.Outputs.ExecutionRole
+  ServiceTaskRole:
+    Value: !GetAtt ServicesBase.Outputs.ServiceTaskRole
+  DBHost:
+    Value: !GetAtt MasterDBStack.Outputs.EndpointAddress
+  DBPort:
+    Value: !GetAtt MasterDBStack.Outputs.EndpointPort
+  LoadBalancerListener:
+    Value: !GetAtt ServicesBase.Outputs.LoadBalancerListener
+  SecureLoadBalancerListener:
+    Value: !GetAtt ServicesBase.Outputs.SecureLoadBalancerListener
+  ECSCluster:
+    Value: !GetAtt ServicesBase.Outputs.Cluster
+  ContainerSecurityGroup:
+    Value: !GetAtt ServicesBase.Outputs.ContainerSecurityGroup
+  SecretsProviderServiceToken:
+    Value: !GetAtt SecretsProvider.Outputs.ServiceToken
+  DatabaseProviderServiceToken:
+    Value: !GetAtt DatabaseProvider.Outputs.ServiceToken
+  PrivateNamespace:
+    Value: !GetAtt ServicesBase.Outputs.PrivateNamespace
