@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -12,26 +13,51 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+// main should only call run, to have a consistent error handling
 func main() {
-	cfg, err := parseConfig()
+	err := run()
 	if err != nil {
-		logrus.WithError(err).Error("Parsing config failed")
+		logrus.WithError(err).Error("Critical Error")
 		os.Exit(1)
+	}
+}
+
+// run is responsible for parsing the config,
+// starting the concurrent tasks and handling
+// OS signals
+func run() error {
+	cfg, err := parseConfig(os.Args)
+	if err != nil {
+		return fmt.Errorf("parsing config: %w", err)
 	}
 
 	// TODO configure logger
-	logConf, err := conf.String(&cfg)
-	if err != nil {
-		logrus.WithError(err).Error("Creating debug config output failed")
-		os.Exit(1)
-	}
-	logrus.WithField("config", logConf).Info("Parsed config")
+	log := logrus.StandardLogger()
 
-	err = run(logrus.StandardLogger(), cfg)
+	confLog, err := conf.String(&cfg)
 	if err != nil {
-		logrus.WithError(err).Error("Critical error")
-		os.Exit(1)
+		return fmt.Errorf("creating debug config output: %w", err)
 	}
+	logrus.WithField("config", confLog).Info("Parsed config")
+
+	ctx := context.Background()
+
+	pgres, err := postgres.Connect(ctx, cfg.postgresDSN())
+	if err != nil {
+		return fmt.Errorf("connection to postgres failed: %w", err)
+	}
+	err = pgres.Migrate(ctx, cfg.MigrationsPath, !cfg.InstallDBExtensions)
+	if err != nil {
+		return fmt.Errorf("migration failed: %w", err)
+	}
+
+	log.WithField("addr", cfg.HTTPAddress).Info("Starting server")
+	err = http.ListenAndServe(cfg.HTTPAddress, rest.NewRouter(log, cfg.BasePath, pgres))
+	if err != nil {
+		return fmt.Errorf("critical server error: %w", err)
+	}
+
+	return nil
 }
 
 type config struct {
@@ -58,11 +84,11 @@ func (c config) postgresDSN() string {
 	)
 }
 
-func parseConfig() (config, error) {
+func parseConfig(args []string) (config, error) {
 	var cfg config
 	confPrefix := "HELLO"
 
-	err := conf.Parse(os.Args, confPrefix, &cfg)
+	err := conf.Parse(args, confPrefix, &cfg)
 	if err != nil {
 		return cfg, err
 	}
@@ -71,32 +97,10 @@ func parseConfig() (config, error) {
 	port := os.Getenv("PORT")
 	if port != "" {
 		if cfg.HTTPAddress != ":80" {
-			logrus.Error("Setting PORT and HTTP_ADDRESS is not allowed")
-			os.Exit(1)
+			return cfg, errors.New("setting PORT and HTTP_ADDRESS is not allowed")
 		}
 		cfg.HTTPAddress = fmt.Sprintf(":%s", port)
 	}
 
 	return cfg, nil
-}
-
-func run(log *logrus.Logger, cfg config) error {
-	ctx := context.Background()
-
-	pgres, err := postgres.Connect(ctx, cfg.postgresDSN())
-	if err != nil {
-		return fmt.Errorf("connection to postgres failed: %w", err)
-	}
-	err = pgres.Migrate(ctx, cfg.MigrationsPath, !cfg.InstallDBExtensions)
-	if err != nil {
-		return fmt.Errorf("migration failed: %w", err)
-	}
-
-	log.WithField("addr", cfg.HTTPAddress).Info("Starting server")
-	err = http.ListenAndServe(cfg.HTTPAddress, rest.NewRouter(log, cfg.BasePath, pgres))
-	if err != nil {
-		return fmt.Errorf("critical server error: %w", err)
-	}
-
-	return nil
 }
