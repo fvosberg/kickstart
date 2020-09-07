@@ -175,7 +175,6 @@ func startServer(ctx context.Context, cfg config, log *logrus.Logger, pgres *pos
 			log.Info("Closed HTTP server for incoming connections")
 			continue
 		}
-		log.WithError(err).Debug("got other error on server shutdown")
 		if err != nil {
 			return fmt.Errorf("shutting down HTTP server: %w", err)
 		}
