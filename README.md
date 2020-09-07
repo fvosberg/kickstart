@@ -1,9 +1,12 @@
 # Kickstart Packages
 
+This Repository is in a very early stage.
+
 The different kickstart packages provide a boilerplate for different use cases.
-Every package consists of deployments to:
+Every package should contain deployments to:
 
 - docker-compose.yml (for local development)
+- Kubernetes
 - AWS Fargate
 - GCP Cloud Run
 - Azure Container Instances
