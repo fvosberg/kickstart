@@ -19,5 +19,5 @@ services:
       - HELLO_POSTGRES_DB=hello-go
       - HELLO_POSTGRES_USER=gopher
       - HELLO_POSTGRES_PASSWORD=secret
-      - HELLO_POSTGRES_URL=postgresd:5432
+      - HELLO_POSTGRES_HOST=postgresd
       - HELLO_PORT=80
