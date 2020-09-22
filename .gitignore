@@ -2,3 +2,4 @@
 /aws/packaged-infrastructure-vpc.yaml
 /aws/packaged-infrastructure.yaml
 terraform.tfstate*
+/aws/database-provider-latest.zip

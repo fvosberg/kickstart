@@ -26,7 +26,6 @@ COPY --from=build-go /src/service/service service
 COPY --from=build-go /src/service/migrations /migrations
 
 ENV HELLO_MIGRATIONS_PATH /migrations
-RUN ls /migrations
 
 EXPOSE 80/TCP
 RUN setcap CAP_NET_BIND_SERVICE=+eip ./service
