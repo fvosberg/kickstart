@@ -1,42 +1,54 @@
-# Go build
-FROM golang:1.15 as build-go
+FROM golang:1.15-alpine as build
 
-ARG BUILD_TAG
+LABEL stage=intermediate
 
 ENV CGO_ENABLED=0
 ENV GO111MODULE=on
 ENV GOOS=linux
-ENV GOPATH=/
 
-WORKDIR /src/service/
+RUN apk add --update --no-cache git ca-certificates tzdata && update-ca-certificates
+RUN addgroup -g 1000 -S appgroup && adduser -u 1001 -S appuser -G appgroup
 
-COPY go.mod .
-COPY go.sum .
+# ---------
+WORKDIR /app-build
+
+ARG GOPROXY
+
+# Copy dependencies
+COPY go.mod go.mod
+COPY go.sum go.sum
 RUN go mod download
 
+# Copy code and build - add irrelevant files to .dockerignore or change the COPY
+# to not unnecessarily invalidate the image layer
 COPY . .
-RUN CGO_ENABLED=0 go build -ldflags "-X main.build=${BUILD_TAG}" -a -o "service" -installsuffix cgo
 
-# Service definition
-FROM alpine
+ARG BUILD_TAG
+ARG GIT_COMMIT=unknown
 
-RUN apk add --update libcap tzdata ca-certificates && rm -rf /var/cache/apk/*
+# Final build
+RUN go build -ldflags "-X main.build=${BUILD_TAG} -w -s" -o service
 
-COPY --from=build-go /src/service/service service
-COPY --from=build-go /src/service/migrations /migrations
+###############################################################################
+#########################  SERVICE STAGE ######################################
+###############################################################################
+FROM scratch
 
-ENV HELLO_MIGRATIONS_PATH /migrations
+COPY --from=build /etc/passwd /etc/passwd
 
 EXPOSE 80/TCP
-RUN setcap CAP_NET_BIND_SERVICE=+eip ./service
 
-RUN update-ca-certificates
+USER appuser
 
-RUN addgroup -g 1000 -S runnergroup && adduser -u 1001 -S apprunner -G runnergroup
-USER apprunner
+COPY --from=build /usr/share/zoneinfo /usr/share/zoneinfo
+COPY --from=build /etc/ssl/certs/ /etc/ssl/certs/
+COPY --from=build /app-build/service ./service
+COPY --from=build /app-build/migrations /migrations
 
+ARG BUILD_TAG
 ARG GIT_COMMIT=unknown
-LABEL git-commit=$CI_COMMIT_SHA
-LABEL build-tag=$BUILD_TAG
 
-ENTRYPOINT ["/service"]
+LABEL git-commit=${GIT_COMMIT}
+LABEL build-tag=${BUILD_TAG}
+
+ENTRYPOINT ["./service"]
