@@ -31,7 +31,7 @@ func NewRouter(log *logrus.Logger, basePath string, repository storage) http.Han
 	r.HandleFunc("/"+path.Join(basePath, "greetings"), s.serveCreateGreeting).Methods("POST")
 	r.HandleFunc("/"+path.Join(basePath, "greetings"), s.serveGreetingsList).Methods("GET")
 	// TODO check postgres
-	r.HandleFunc("/"+path.Join(basePath, "debug/health"), s.serveHealthCheck).Methods("GET")
+	r.HandleFunc("/"+path.Join(basePath, "internal/health"), s.serveHealthCheck).Methods("GET")
 
 	r.NotFoundHandler = http.HandlerFunc(s.serveNotFound)
 	r.MethodNotAllowedHandler = http.HandlerFunc(s.serveMethodNotAllowed)

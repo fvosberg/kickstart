@@ -1,0 +1,98 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    run: hello-go
+  name: hello-go
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 2
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      run: hello-go
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        run: hello-go
+    spec:
+      containers:
+        - image: docker.com/hello-go:latest
+          imagePullPolicy: Always
+          name: hello-go
+          ports:
+            - name: api-port
+              containerPort: 80
+              protocol: TCP
+          env:
+            - name: HELLO_GO_LOG_FORMAT
+              value: "JSON"
+          livenessProbe:
+            httpGet:
+              path: /internal/health
+              port: api-port
+              scheme: HTTP
+            initialDelaySeconds: 10
+            periodSeconds: 10 # this is pretty high, as the livenessProbe isn't really needed by us. Our process crashes, when it failes. https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/#when-should-you-use-a-liveness-probe
+            failureThreshold: 3
+            successThreshold: 1
+            timeoutSeconds: 1
+          readinessProbe:
+            httpGet:
+              path: /internal/health
+              port: api-port
+              scheme: HTTP
+            initialDelaySeconds: 15
+            timeoutSeconds: 2 # quite small, because I expect a not open port to throw an error immediately anyway
+            periodSeconds: 10 # quite high, as the readinessProbe is used the whole lifecycle of the pod, not only at startup
+            successThreshold: 1
+            failureThreshold: 12 # 12 * 10 periodSeconds => 2min for booting + 15 seconds initialDelay
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+        - name: postgres
+          image: postgres:12.4
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5432
+              name: data-port
+              protocol: TCP
+            - containerPort: 5432
+              name: liveness-port
+              protocol: TCP
+          env:
+            - name: POSTGRES_USER
+              value: "subscriber-backend"
+            - name: POSTGRES_DB
+              value: "subscriber-backend"
+            - name: "POSTGRES_PASSWORD"
+              valueFrom:
+                secretKeyRef:
+                  name: subscriber-backend-postgres
+                  key: password
+          resources:
+            limits:
+              memory: "256Mi"
+              cpu: "250m"
+          readinessProbe:
+            exec:
+              command: [ "psql", "-w", "-U", "subscriber-backend", "-d", "subscriber-backend", "-c", "SELECT 1" ]
+            initialDelaySeconds: 15
+            timeoutSeconds: 2
+          livenessProbe:
+            exec:
+              command: [ "psql", "-w", "-U", "subscriber-backend", "-d", "subscriber-backend", "-c", "SELECT 1" ]
+            initialDelaySeconds: 45
+            timeoutSeconds: 2
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext: { }
+      terminationGracePeriodSeconds: 30

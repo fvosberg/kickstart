@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: hello-go
+  labels:
+    run: hello-go
+spec:
+  type: ClusterIP
+  selector:
+    run: hello-go
+  ports:
+    - port: 80
+      targetPort: 80
