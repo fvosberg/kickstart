@@ -131,7 +131,7 @@ func (s server) serveMethodNotAllowed(w http.ResponseWriter, r *http.Request) {
 	s.writeError("Not Found Handler", w, err, 405, 1593621251)
 }
 func (s server) serveHealthCheck(w http.ResponseWriter, r *http.Request) {
-	w.Write([]byte(`{"status":"ok"}`))
+	_, _ = w.Write([]byte(`{"status":"ok"}`))
 }
 
 func (s server) writeError(endpointName string, w http.ResponseWriter, err error, httpCode, errorCode int) {
